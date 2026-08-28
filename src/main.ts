@@ -1,12 +1,14 @@
 import "./styles.css";
 import { applyGeneratedTexts, missingEssentials } from "./autofill";
-import { defaultHotspots, landingModeLabels } from "./defaults";
+import { buildBriefPrompt, hex, parseBriefResponse, seedIsUsable } from "./briefPrompt";
+import { defaultHotspots, emptySeed, landingModeLabels } from "./defaults";
 import { buildNetlifyZip } from "./export/exporter";
 import { languageMeta, languageOrder, languages } from "./i18n";
 import { buildImagePrompt } from "./prompts";
-import { cloneHotspots, loadBrief, loadHotspots, resetSavedBrief, saveBrief, saveHotspots } from "./storage";
+import { cloneHotspots, loadBrief, loadHotspots, loadSeed, resetSavedBrief, saveBrief, saveHotspots, saveSeed } from "./storage";
 import type {
   BriefData,
+  BriefSeed,
   DetectedRegion,
   Device,
   ImageSize,
@@ -16,7 +18,8 @@ import type {
   ScanImage,
   UploadedImage,
 } from "./types";
-import { detectButtons, fileToScan, fitRegionAtPoint } from "./utils/detect";
+import { WHATSAPP_GREENS, detectButtons, fileToScan, fitRegionAtPoint } from "./utils/detect";
+import { hexToRgb } from "./utils/color";
 import { readImageSize } from "./utils/images";
 import { renderPreviewInto as renderLandingPreview } from "./preview";
 import {
@@ -31,7 +34,13 @@ import {
 } from "./projects";
 import { escapeAttr, escapeHtml, linesToText, slugify, textToLines } from "./utils/text";
 import { formatNumberForDisplay, normalizeWhatsAppNumber, whatsappLink } from "./utils/whatsapp";
-import { createChecklist, findForbiddenTerms, hotspotIsTiny, needsVisualWhatsApp } from "./validation";
+import {
+  createChecklist,
+  defaultHotspotAction,
+  findForbiddenTerms,
+  hotspotIsTiny,
+  needsLeadForm,
+} from "./validation";
 
 const appRootOrNull = document.querySelector<HTMLDivElement>("#app");
 
@@ -58,10 +67,27 @@ interface DragState {
 }
 
 let brief = loadBrief();
+let seed = loadSeed();
+
+const seedFieldIds: Array<[string, keyof BriefSeed]> = [
+  ["seedProduct", "product"],
+  ["seedPrice", "price"],
+  ["seedCurrency", "currency"],
+  ["seedCity", "city"],
+  ["seedAudience", "audience"],
+  ["seedAvoid", "avoid"],
+  ["seedColors", "colors"],
+  ["seedExtra", "extra"],
+];
+
 let selectedDevice: Device = "desktop";
 let selectedHotspotId = "";
 let productImageName = "";
 let quickMode = false;
+/** Survit a rerenderBriefForm, qui remplace le formulaire d'un bloc. */
+let generatedOpen = false;
+/** Les coordonnees chiffrees sont un recours : le placement se fait sur l'image. */
+let manualCoords = false;
 let fitMode = false;
 let tolerance = 70;
 let dragState: DragState | null = null;
@@ -122,14 +148,7 @@ function renderApp(): void {
           </div>
         </div>
         <div id="projectStatus" class="status" aria-live="polite"></div>
-        <div class="brief-toolbar">
-          <label class="switch">
-            <input id="quickMode" type="checkbox"${quickMode ? " checked" : ""}>
-            <span>Mode rapide (peu d'infos)</span>
-          </label>
-          <button id="autofillEmpty" class="ghost-button compact-button" type="button">Compléter les textes manquants</button>
-          <button id="autofillAll" class="ghost-button compact-button" type="button">Tout réécrire dans la langue</button>
-        </div>
+        ${renderAssistBlock()}
         <form id="briefForm" class="brief-form">
           ${renderBriefFields(brief)}
         </form>
@@ -160,6 +179,70 @@ function renderApp(): void {
       ${renderExportPanel()}
     </main>
     ${renderWorkspace()}
+  `;
+}
+
+/**
+ * Le chemin principal de l'etape 1 : le vendeur donne ce qu'il connait par
+ * coeur, ChatGPT ecrit les dix-huit champs. Le formulaire dessous sert a
+ * verifier, plus a saisir.
+ */
+function renderAssistBlock(): string {
+  return `
+        <section class="assist-block" aria-labelledby="assist-title">
+          <div class="assist-head">
+            <h3 id="assist-title">Laissez ChatGPT écrire le brief</h3>
+            <p>Donnez ce que vous savez déjà sur le produit. L'outil fabrique le prompt, ChatGPT renvoie le texte, et le formulaire ci-dessous se remplit tout seul.</p>
+          </div>
+          <div class="seed-grid">
+            ${seedField("seedProduct", "Produit", seed.product, "Amlou pour enfant, pot de 250 g", true)}
+            ${seedField("seedPrice", "Prix", seed.price, "149", false)}
+            ${seedField("seedCurrency", "Devise", seed.currency, "Dhs", false)}
+            ${seedField("seedCity", "Ville ou zone", seed.city, "Casablanca", false)}
+            ${seedField("seedAudience", "À qui ça s'adresse", seed.audience, "Parents d'enfants en bas âge", false)}
+            ${seedField("seedAvoid", "À ne pas dire", seed.avoid, "bio, garanti, médical", false)}
+            ${seedField("seedColors", "Couleurs souhaitées", seed.colors, "laisser ChatGPT décider", false)}
+          </div>
+          <label for="seedExtra">
+            Autre chose à savoir (facultatif)
+            <textarea id="seedExtra" rows="2" placeholder="Promotion, format, délai, ce qui rend l'offre différente...">${escapeHtml(seed.extra)}</textarea>
+          </label>
+          <div class="assist-actions">
+            <button id="copyBriefPrompt" class="primary-button compact-button" type="button">Copier le prompt et ouvrir ChatGPT</button>
+            <button id="togglePrompt" class="ghost-button compact-button" type="button" aria-expanded="false" aria-controls="briefPromptPreview">Voir le prompt</button>
+          </div>
+          <textarea id="briefPromptPreview" class="prompt-preview" rows="16" readonly hidden aria-label="Prompt envoyé à ChatGPT"></textarea>
+          <label for="briefResponse">
+            Collez ici la réponse de ChatGPT
+            <textarea id="briefResponse" rows="3" placeholder="Collez le bloc renvoyé par ChatGPT : le brief se remplit tout seul."></textarea>
+          </label>
+          <div class="assist-actions">
+            <button id="applyBriefResponse" class="ghost-button compact-button" type="button">Remplir le brief</button>
+          </div>
+          <div id="assistStatus" class="status" aria-live="polite"></div>
+        </section>
+  `;
+}
+
+/** Pastille + hexadecimal : on choisit a l'oeil, on corrige au code exact. */
+function swatch(name: string, label: string, value: string): string {
+  return `
+    <label class="swatch">
+      ${escapeHtml(label)}
+      <span class="swatch-row">
+        <input type="color" name="${escapeAttr(name)}" value="${escapeAttr(value)}" aria-label="${escapeAttr(label)}">
+        <output>${escapeHtml(value.toUpperCase())}</output>
+      </span>
+    </label>
+  `;
+}
+
+function seedField(id: string, label: string, value: string, placeholder: string, wide: boolean): string {
+  return `
+    <label for="${id}"${wide ? ' class="seed-wide"' : ""}>
+      ${escapeHtml(label)}
+      <input id="${id}" type="text" value="${escapeAttr(value)}" placeholder="${escapeAttr(placeholder)}">
+    </label>
   `;
 }
 
@@ -210,12 +293,16 @@ function renderExportPanel(): string {
           </div>
         </div>
         <div class="hotspot-actions">
-          <button id="detectHotspots" class="ghost-button compact-button" type="button">Proposer les boutons verts</button>
+          <button id="detectHotspots" class="ghost-button compact-button" type="button">Proposer les boutons</button>
           <button id="fitToggle" class="ghost-button compact-button" type="button" data-fit-toggle aria-pressed="false">Viser un bouton</button>
           <button id="addHotspot" class="ghost-button compact-button" type="button">Ajouter une zone</button>
           <button id="openWorkspace" class="ghost-button compact-button" type="button">Atelier de placement</button>
           <button id="undoHotspots" class="ghost-button compact-button" type="button" disabled>Annuler</button>
           <button id="copyMessages" class="ghost-button compact-button" type="button">Reprendre les messages de l'autre image</button>
+          <label class="switch compact-switch">
+            <input id="manualCoords" type="checkbox">
+            <span>Régler les coordonnées à la main</span>
+          </label>
         </div>
         <div id="hotspotStatus" class="status" aria-live="polite"></div>
         <div id="candidateList" class="candidate-list" data-candidate-list hidden></div>
@@ -234,13 +321,13 @@ function renderExportPanel(): string {
   `;
 }
 
+/**
+ * Deux blocs, selon une seule question : ChatGPT peut-il deviner ce champ ?
+ * Non (langue, type de page, numero, image produit) : toujours visible.
+ * Oui : replie, et on ne l'ouvre que pour verifier ou corriger.
+ */
 function renderBriefFields(data: BriefData): string {
   return `
-    <div class="form-row three-cols">
-      ${field("productName", "Nom du produit", data.productName, "text", true)}
-      ${field("price", "Prix", data.price, "text", true)}
-      ${field("currency", "Devise", data.currency, "text", true)}
-    </div>
     <div class="form-row three-cols">
       <label>
         Langue de la landing
@@ -256,11 +343,7 @@ function renderBriefFields(data: BriefData): string {
           ${renderModeOption("hybrid", data.landingMode)}
         </select>
       </label>
-      ${field("targetAudience", "Cible", data.targetAudience, "text", false)}
-    </div>
-    <div class="form-row two-cols">
       ${field("whatsappNumber", "Numéro WhatsApp", data.whatsappNumber, "text", true)}
-      ${field("ctaText", "Texte du bouton principal", data.ctaText, "text", true)}
     </div>
     <div class="wa-preview" id="waPreview">
       <div>
@@ -269,35 +352,70 @@ function renderBriefFields(data: BriefData): string {
       </div>
       <a id="waTestLink" class="ghost-button compact-button" href="#" target="_blank" rel="noopener">Tester le lien</a>
     </div>
-    ${textarea("baseMessage", "Message WhatsApp par défaut", data.baseMessage, 2, true)}
-    <div class="advanced-block"${quickMode ? " hidden" : ""}>
-      <label>
-        Image produit à joindre dans ChatGPT Images
-        <input id="productImage" name="productImage" type="file" accept="image/*">
-        <span id="productImageHint" class="field-hint">Le prompt rappellera de joindre cette image dans ChatGPT Images.</span>
-      </label>
-      <div class="form-row two-cols">
-        ${field("heroTitle", "Titre héro", data.heroTitle, "text", false)}
-        ${textarea("subtitle", "Sous-titre", data.subtitle, 3, false)}
+    <label>
+      Image produit à joindre dans ChatGPT Images
+      <input id="productImage" name="productImage" type="file" accept="image/*">
+      <span id="productImageHint" class="field-hint">Le prompt rappellera de joindre cette image dans ChatGPT Images.</span>
+    </label>
+
+    <details class="generated-block" id="generatedBlock"${generatedOpen ? " open" : ""}>
+      <summary>
+        <span class="generated-title">Textes écrits par ChatGPT</span>
+        <span class="generated-hint">ouvrir pour vérifier ou corriger</span>
+      </summary>
+      <div class="brief-toolbar">
+        <label class="switch">
+          <input id="quickMode" type="checkbox"${quickMode ? " checked" : ""}>
+          <span>Mode rapide (peu d'infos)</span>
+        </label>
+        <button id="autofillEmpty" class="ghost-button compact-button" type="button">Compléter les textes manquants</button>
+        <button id="autofillAll" class="ghost-button compact-button" type="button">Tout réécrire dans la langue</button>
       </div>
-      <fieldset>
-        <legend>Bénéfices</legend>
-        <div class="repeat-grid">
-          ${data.benefits.map((benefit, index) => renderBenefit(index, benefit.title, benefit.text)).join("")}
-        </div>
-      </fieldset>
-      <fieldset>
-        <legend>FAQ</legend>
-        <div class="repeat-grid">
-          ${data.faqs.map((faq, index) => renderFaq(index, faq.question, faq.answer)).join("")}
-        </div>
-      </fieldset>
-      <div class="form-row two-cols">
-        ${textarea("formFields", "Champs du formulaire réel", linesToText(data.formFields), 4, false)}
-        ${textarea("forbiddenClaims", "Mots ou promesses interdits", linesToText(data.forbiddenClaims), 4, false)}
+      <div class="form-row three-cols">
+        ${field("productName", "Nom du produit", data.productName, "text", true)}
+        ${field("price", "Prix", data.price, "text", true)}
+        ${field("currency", "Devise", data.currency, "text", true)}
       </div>
-      ${textarea("visualStyle", "Direction visuelle", data.visualStyle, 4, false)}
-    </div>
+      <div class="form-row two-cols">
+        ${field("targetAudience", "Cible", data.targetAudience, "text", false)}
+        ${field("ctaText", "Texte du bouton principal", data.ctaText, "text", true)}
+      </div>
+      ${textarea("baseMessage", "Message WhatsApp par défaut", data.baseMessage, 2, true)}
+      <div class="advanced-block"${quickMode ? " hidden" : ""}>
+        <div class="form-row two-cols">
+          ${field("heroTitle", "Titre héro", data.heroTitle, "text", false)}
+          ${textarea("subtitle", "Sous-titre", data.subtitle, 3, false)}
+        </div>
+        <fieldset>
+          <legend>Bénéfices</legend>
+          <div class="repeat-grid">
+            ${data.benefits.map((benefit, index) => renderBenefit(index, benefit.title, benefit.text)).join("")}
+          </div>
+        </fieldset>
+        <fieldset>
+          <legend>FAQ</legend>
+          <div class="repeat-grid">
+            ${data.faqs.map((faq, index) => renderFaq(index, faq.question, faq.answer)).join("")}
+          </div>
+        </fieldset>
+        <div class="form-row two-cols">
+          ${textarea("formFields", "Champs du formulaire réel", linesToText(data.formFields), 4, false)}
+          ${textarea("forbiddenClaims", "Mots ou promesses interdits", linesToText(data.forbiddenClaims), 4, false)}
+        </div>
+        ${textarea("visualStyle", "Direction visuelle", data.visualStyle, 4, false)}
+        <fieldset class="palette-fieldset">
+          <legend>Couleurs de la landing</legend>
+          <p class="field-hint">ChatGPT les choisit selon le produit. Elles pilotent l'image, la page exportée et la détection des boutons.</p>
+          <div class="palette-grid">
+            ${swatch("palette.background", "Fond", data.palette.background)}
+            ${swatch("palette.text", "Texte", data.palette.text)}
+            ${swatch("palette.accent", "Accent", data.palette.accent)}
+            ${swatch("palette.button", "Bouton", data.palette.button)}
+            ${swatch("palette.buttonText", "Texte du bouton", data.palette.buttonText)}
+          </div>
+        </fieldset>
+      </div>
+    </details>
   `;
 }
 
@@ -361,9 +479,7 @@ function bindEvents(): void {
   getBriefForm().addEventListener("input", handleBriefInput);
   getBriefForm().addEventListener("change", handleBriefInput);
   getBriefForm().addEventListener("submit", (event) => event.preventDefault());
-  query<HTMLInputElement>("#quickMode").addEventListener("change", handleQuickModeToggle);
-  query<HTMLButtonElement>("#autofillEmpty").addEventListener("click", () => runAutofill("empty"));
-  query<HTMLButtonElement>("#autofillAll").addEventListener("click", () => runAutofill("all"));
+  bindFormControls();
   query<HTMLButtonElement>("#resetBrief").addEventListener("click", handleResetBrief);
   query<HTMLButtonElement>("#downloadZip").addEventListener("click", handleZipExport);
   query<HTMLButtonElement>("#previewLanding").addEventListener("click", handlePreview);
@@ -371,6 +487,10 @@ function bindEvents(): void {
   query<HTMLButtonElement>("#fitToggle").addEventListener("click", toggleFitMode);
   query<HTMLButtonElement>("#addHotspot").addEventListener("click", () => addHotspot(selectedDevice));
   query<HTMLButtonElement>("#copyMessages").addEventListener("click", copyMessagesFromOtherDevice);
+  query<HTMLInputElement>("#manualCoords").addEventListener("change", (event) => {
+    manualCoords = (event.currentTarget as HTMLInputElement).checked;
+    renderHotspotEditor();
+  });
   query<HTMLUListElement>("#checklist").addEventListener("click", handleChecklistJump);
   query<HTMLInputElement>("#tolerance").addEventListener("input", (event) => {
     tolerance = Number((event.currentTarget as HTMLInputElement).value) || 70;
@@ -384,6 +504,10 @@ function bindEvents(): void {
   });
   document.addEventListener("input", (event) => {
     if ((event.target as HTMLElement).closest("[data-hotspot-editor]")) handleHotspotInput(event);
+  });
+  document.addEventListener("change", (event) => {
+    const node = event.target as HTMLElement;
+    if (node.closest("[data-hotspot-editor]") && node.matches("select[data-field]")) handleHotspotInput(event);
   });
   document.addEventListener("click", (event) => {
     const node = event.target as HTMLElement;
@@ -404,13 +528,32 @@ function bindEvents(): void {
   window.addEventListener("pointerup", handleHotspotPointerUp);
   bindWorkspaceEvents();
   bindProjectEvents();
+  bindAssistEvents();
   renderProjectList();
 }
 
 function handleBriefInput(): void {
+  const previousMode = brief.landingMode;
   brief = readBriefFromForm();
+  if (brief.landingMode !== previousMode) normalizeHotspotActions();
   saveBrief(brief);
   refreshAll();
+}
+
+/**
+ * Sans formulaire sur la page, une zone "formulaire" n'a nulle part ou aller ;
+ * en mode leads, l'inverse. Seul le mode hybride laisse le choix zone par zone.
+ */
+function normalizeHotspotActions(): void {
+  if (brief.landingMode === "hybrid") return;
+
+  const action = defaultHotspotAction(brief);
+  (["desktop", "mobile"] as Device[]).forEach((device) => {
+    hotspots[device].forEach((hotspot) => {
+      hotspot.action = action;
+    });
+  });
+  saveHotspots(hotspots);
 }
 
 function handleQuickModeToggle(event: Event): void {
@@ -420,9 +563,24 @@ function handleQuickModeToggle(event: Event): void {
 
 function rerenderBriefForm(): void {
   getBriefForm().innerHTML = renderBriefFields(brief);
+  bindFormControls();
+  refreshAll();
+}
+
+/**
+ * Ces commandes vivent dans le formulaire, que rerenderBriefForm remplace
+ * d'un bloc : il faut les relier a chaque rendu, pas seulement au demarrage.
+ */
+function bindFormControls(): void {
+  query<HTMLInputElement>("#quickMode").addEventListener("change", handleQuickModeToggle);
+  query<HTMLButtonElement>("#autofillEmpty").addEventListener("click", () => runAutofill("empty"));
+  query<HTMLButtonElement>("#autofillAll").addEventListener("click", () => runAutofill("all"));
+  query<HTMLDetailsElement>("#generatedBlock").addEventListener("toggle", (event) => {
+    generatedOpen = (event.currentTarget as HTMLDetailsElement).open;
+  });
+
   const productImage = document.querySelector<HTMLInputElement>("#productImage");
   if (productImage) productImage.addEventListener("change", handleProductImageUpload);
-  refreshAll();
 }
 
 function runAutofill(mode: "empty" | "all"): void {
@@ -442,6 +600,7 @@ function runAutofill(mode: "empty" | "all"): void {
 
 function handleResetBrief(): void {
   brief = resetSavedBrief();
+  seed = { ...emptySeed };
   Object.values(uploads).forEach((upload) => {
     if (upload) URL.revokeObjectURL(upload.url);
   });
@@ -486,6 +645,13 @@ function readBriefFromForm(): BriefData {
     formFields: textToLines(read("formFields")),
     forbiddenClaims: textToLines(read("forbiddenClaims")),
     visualStyle: read("visualStyle"),
+    palette: {
+      background: hex(read("palette.background"), brief.palette.background),
+      text: hex(read("palette.text"), brief.palette.text),
+      accent: hex(read("palette.accent"), brief.palette.accent),
+      button: hex(read("palette.button"), brief.palette.button),
+      buttonText: hex(read("palette.buttonText"), brief.palette.buttonText),
+    },
   };
 }
 
@@ -504,10 +670,20 @@ function refreshAll(): void {
   );
   query<HTMLParagraphElement>("#promptNote").textContent = `Langue demandée à ChatGPT Images : ${languageMeta(brief.language).label}. Les positions des boutons suivent vos zones.`;
   renderWaPreview();
+  syncSwatchLabels();
+  refreshBriefPrompt();
   renderPreviews();
   renderHotspotEditor();
   renderChecklist();
   renderWarnings();
+}
+
+/** Le formulaire n'est pas reconstruit a chaque frappe : l'hexa affiche suivrait sinon d'un rendu. */
+function syncSwatchLabels(): void {
+  document.querySelectorAll<HTMLInputElement>('.swatch input[type="color"]').forEach((input) => {
+    const label = input.parentElement?.querySelector("output");
+    if (label) label.textContent = input.value.toUpperCase();
+  });
 }
 
 function renderWaPreview(): void {
@@ -623,11 +799,9 @@ function renderPreviewInto(frame: HTMLDivElement, device: Device): void {
   img.alt = `Image ${device} générée pour ${brief.productName || "la landing page"}`;
   stage.append(img);
 
-  if (needsVisualWhatsApp(brief)) {
-    hotspots[device].forEach((hotspot) => stage.append(createHotspotElement(hotspot)));
-    if (device === selectedDevice) {
-      (candidates[device] || []).forEach((region, index) => stage.append(createCandidateElement(region, index)));
-    }
+  hotspots[device].forEach((hotspot) => stage.append(createHotspotElement(hotspot)));
+  if (device === selectedDevice) {
+    (candidates[device] || []).forEach((region, index) => stage.append(createCandidateElement(region, index)));
   }
 
   frame.append(stage);
@@ -674,44 +848,83 @@ function renderHotspotEditor(): void {
 }
 
 function hotspotEditorMarkup(): string {
-  if (!needsVisualWhatsApp(brief)) {
-    return `<p class="empty-note">Mode capture de leads : aucun bouton WhatsApp visuel n'est nécessaire.</p>`;
-  }
-
   const list = hotspots[selectedDevice];
 
   if (!list.length) {
-    return `<p class="empty-note">Aucune zone sur cette image. Utilisez « Proposer les boutons verts », « Viser un bouton » ou « Ajouter une zone ».</p>`;
+    return `<p class="empty-note">Aucune zone sur cette image. Utilisez « Proposer les boutons », « Viser un bouton » ou « Ajouter une zone ».</p>`;
   }
 
   return list.map((hotspot) => renderHotspotRow(hotspot)).join("");
 }
 
+/**
+ * Le placement se fait sur l'image : viser un bouton, glisser la zone, la
+ * pousser aux fleches. La liste ne sert donc qu'a nommer, ecrire le message et
+ * supprimer. Une zone non selectionnee tient sur une ligne ; seule la zone
+ * selectionnee ouvre ses reglages, et les coordonnees chiffrees restent un
+ * recours volontaire.
+ */
 function renderHotspotRow(hotspot: Hotspot): string {
   const selected = hotspot.id === selectedHotspotId;
+  const id = escapeAttr(hotspot.id);
+
+  if (!selected) {
+    return `
+    <div class="hotspot-row is-compact" data-row-id="${id}">
+      <button type="button" class="hotspot-pick" data-action="select" data-hotspot-id="${id}" aria-pressed="false">
+        <span class="hotspot-name">${escapeHtml(hotspot.label)}</span>
+        <span class="hotspot-pos">${formatPercent(hotspot.left)} · ${formatPercent(hotspot.top)}</span>
+      </button>
+      <button type="button" class="mini-button danger" data-action="delete" data-hotspot-id="${id}">Supprimer</button>
+    </div>
+  `;
+  }
 
   return `
-    <div class="hotspot-row${selected ? " is-selected" : ""}" data-row-id="${escapeAttr(hotspot.id)}">
+    <div class="hotspot-row is-selected" data-row-id="${id}">
       <div class="hotspot-row-head">
-        <input class="hotspot-label" type="text" value="${escapeAttr(hotspot.label)}" data-hotspot-id="${escapeAttr(hotspot.id)}" data-field="label" aria-label="Nom de la zone">
+        <input class="hotspot-label" type="text" value="${escapeAttr(hotspot.label)}" data-hotspot-id="${id}" data-field="label" aria-label="Nom de la zone">
         <div class="hotspot-row-actions">
-          <button type="button" class="mini-button" data-action="select" data-hotspot-id="${escapeAttr(hotspot.id)}" aria-pressed="${selected}">${selected ? "Sélectionnée" : "Sélectionner"}</button>
-          <button type="button" class="mini-button" data-action="apply-size" data-hotspot-id="${escapeAttr(hotspot.id)}">Même taille pour toutes</button>
-          <button type="button" class="mini-button" data-action="duplicate" data-hotspot-id="${escapeAttr(hotspot.id)}">Dupliquer</button>
-          <button type="button" class="mini-button danger" data-action="delete" data-hotspot-id="${escapeAttr(hotspot.id)}">Supprimer</button>
+          <button type="button" class="mini-button" data-action="select" data-hotspot-id="${id}" aria-pressed="true">Fermer</button>
+          <button type="button" class="mini-button" data-action="apply-size" data-hotspot-id="${id}">Même taille pour toutes</button>
+          <button type="button" class="mini-button" data-action="duplicate" data-hotspot-id="${id}">Dupliquer</button>
+          <button type="button" class="mini-button danger" data-action="delete" data-hotspot-id="${id}">Supprimer</button>
         </div>
       </div>
-      <label class="hotspot-message">
+      ${renderHotspotAction(hotspot)}
+      <label class="hotspot-message"${hotspot.action === "form" ? " hidden" : ""}>
         Message WhatsApp de ce bouton
-        <textarea rows="2" data-hotspot-id="${escapeAttr(hotspot.id)}" data-field="message" placeholder="Vide = message par défaut du brief">${escapeHtml(hotspot.message)}</textarea>
+        <textarea rows="2" data-hotspot-id="${id}" data-field="message" placeholder="Vide = message par défaut du brief">${escapeHtml(hotspot.message)}</textarea>
       </label>
-      <div class="hotspot-coords">
+      ${
+        manualCoords
+          ? `<div class="hotspot-coords">
         ${coordinateInput(hotspot, "left", "Gauche")}
         ${coordinateInput(hotspot, "top", "Haut")}
         ${coordinateInput(hotspot, "width", "Largeur")}
         ${coordinateInput(hotspot, "height", "Hauteur")}
-      </div>
+      </div>`
+          : `<p class="hotspot-hint">Glissez la zone sur l'image, ou poussez-la aux flèches. Maj + flèches pour la redimensionner.</p>`
+      }
     </div>
+  `;
+}
+
+function formatPercent(value: number): string {
+  return `${value.toFixed(1).replace(".", ",")} %`;
+}
+
+function renderHotspotAction(hotspot: Hotspot): string {
+  if (!needsLeadForm(brief)) return "";
+
+  return `
+    <label class="hotspot-action">
+      Ce bouton ouvre
+      <select data-hotspot-id="${escapeAttr(hotspot.id)}" data-field="action">
+        <option value="whatsapp"${hotspot.action === "whatsapp" ? " selected" : ""}>WhatsApp</option>
+        <option value="form"${hotspot.action === "form" ? " selected" : ""}>Le formulaire de la page</option>
+      </select>
+    </label>
   `;
 }
 
@@ -729,7 +942,9 @@ function coordinateInput(
 }
 
 function handleHotspotInput(event: Event): void {
-  const input = (event.target as HTMLElement).closest<HTMLInputElement | HTMLTextAreaElement>("[data-hotspot-id][data-field]");
+  const input = (event.target as HTMLElement).closest<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>(
+    "[data-hotspot-id][data-field]"
+  );
   if (!input) return;
 
   const hotspot = findHotspot(selectedDevice, input.dataset.hotspotId || "");
@@ -741,6 +956,12 @@ function handleHotspotInput(event: Event): void {
     hotspot.label = input.value;
   } else if (fieldName === "message") {
     hotspot.message = input.value;
+  } else if (fieldName === "action") {
+    hotspot.action = input.value === "form" ? "form" : "whatsapp";
+    saveHotspots(hotspots);
+    renderHotspotEditor();
+    renderPreviews();
+    return;
   } else {
     const key = fieldName as keyof Pick<Hotspot, "left" | "top" | "width" | "height">;
     hotspot[key] = clamp(Number(input.value), 0, 100);
@@ -814,6 +1035,7 @@ function addHotspot(device: Device, region?: { left: number; top: number; width:
     height: region?.height ?? 4,
     device,
     message: "",
+    action: defaultHotspotAction(brief),
   };
 
   normalizeHotspot(hotspot);
@@ -845,7 +1067,12 @@ function handleDetectHotspots(): void {
     return;
   }
 
-  const regions = detectButtons(scan, tolerance);
+  // La couleur des boutons vient du brief, pas d'une constante : l'outil sert
+  // tous les produits, et le vert WhatsApp n'est plus qu'un cas parmi d'autres.
+  const wanted = hexToRgb(brief.palette.button);
+  const targets = wanted ? [wanted] : WHATSAPP_GREENS;
+
+  const regions = detectButtons(scan, tolerance, targets);
   candidates[selectedDevice] = regions;
   renderCandidates();
   renderPreviews();
@@ -853,8 +1080,8 @@ function handleDetectHotspots(): void {
   setStatus(
     "#hotspotStatus",
     regions.length
-      ? `${regions.length} zone(s) verte(s) trouvée(s). Ajoutez celles qui sont de vrais boutons.`
-      : "Aucune zone verte trouvée. Montez la tolérance, ou utilisez « Viser un bouton » et cliquez directement dessus.",
+      ? `${regions.length} zone(s) trouvée(s) à la couleur ${brief.palette.button}. Ajoutez celles qui sont de vrais boutons.`
+      : `Aucune zone ${brief.palette.button} trouvée. Montez la tolérance, ou utilisez « Viser un bouton » et cliquez directement dessus.`,
     regions.length === 0
   );
 }
@@ -1214,7 +1441,7 @@ function renderWarnings(): void {
   }
 
   const tinyZones = [...hotspots.desktop, ...hotspots.mobile].filter(hotspotIsTiny);
-  if (needsVisualWhatsApp(brief) && tinyZones.length) {
+  if (tinyZones.length) {
     warnings.push(`${tinyZones.length} zone(s) trop petite(s) pour un doigt : ${tinyZones.map((zone) => zone.label).join(", ")}.`);
   }
 
@@ -1473,10 +1700,18 @@ function syncSelectionIntoView(source: "list" | "canvas"): void {
     return;
   }
 
+  // Les fleches n'agissent que sur la zone qui a le focus DOM. Choisir dans la
+  // liste doit donc donner le focus au reperage sur l'image, sinon le clavier
+  // ne repond pas alors qu'on vient justement de designer la zone.
+  const scope = workspaceOpen ? "#wsFrame" : `[data-preview="${selectedDevice}"]`;
   const marker = document.querySelector<HTMLElement>(
-    `#wsFrame .preview-hotspot[data-hotspot-id="${selectedHotspotId}"]`
+    `${scope} .preview-hotspot[data-hotspot-id="${selectedHotspotId}"]`
   );
-  if (marker) marker.scrollIntoView({ block: "center", inline: "center" });
+
+  if (marker) {
+    marker.scrollIntoView({ block: "center", inline: "center" });
+    marker.focus({ preventScroll: true });
+  }
 }
 
 function bindWorkspaceEvents(): void {
@@ -1675,6 +1910,13 @@ function handleChecklistJump(event: Event): void {
   const target = document.querySelector<HTMLElement>(button.dataset.fix || "");
   if (!target) return;
 
+  // Un champ a corriger peut vivre dans le bloc replie : l'y envoyer ferme ne sert a rien.
+  const holder = target.closest<HTMLDetailsElement>("details");
+  if (holder && !holder.open) {
+    holder.open = true;
+    generatedOpen = true;
+  }
+
   target.scrollIntoView({ behavior: "smooth", block: "center" });
   if (target.matches("input, textarea, select")) {
     window.setTimeout(() => target.focus(), 350);
@@ -1707,4 +1949,109 @@ function copyMessagesFromOtherDevice(): void {
   renderPreviews();
   refreshPrompts();
   setHotspotStatus(`Libellés et messages repris depuis l'image ${source}.`);
+}
+
+function bindAssistEvents(): void {
+  seedFieldIds.forEach(([id]) => {
+    query<HTMLInputElement | HTMLTextAreaElement>(`#${id}`).addEventListener("input", handleSeedInput);
+  });
+  query<HTMLButtonElement>("#copyBriefPrompt").addEventListener("click", handleCopyAndOpen);
+  query<HTMLButtonElement>("#togglePrompt").addEventListener("click", togglePromptPreview);
+  query<HTMLButtonElement>("#applyBriefResponse").addEventListener("click", applyBriefResponse);
+
+  // Coller la reponse suffit : un bouton de plus n'apporte rien a ce stade.
+  query<HTMLTextAreaElement>("#briefResponse").addEventListener("paste", () => {
+    window.setTimeout(() => applyBriefResponse(), 0);
+  });
+
+  refreshBriefPrompt();
+}
+
+function handleSeedInput(): void {
+  seedFieldIds.forEach(([id, key]) => {
+    seed[key] = query<HTMLInputElement | HTMLTextAreaElement>(`#${id}`).value;
+  });
+  saveSeed(seed);
+  refreshBriefPrompt();
+}
+
+function refreshBriefPrompt(): void {
+  query<HTMLTextAreaElement>("#briefPromptPreview").value = buildBriefPrompt(seed, brief);
+
+  const usable = seedIsUsable(seed);
+  const copyButton = query<HTMLButtonElement>("#copyBriefPrompt");
+  copyButton.disabled = !usable;
+  copyButton.title = usable ? "" : "Indiquez d'abord le produit.";
+}
+
+/**
+ * Copier puis ouvrir dans le meme geste : l'aller-retour vers ChatGPT est la
+ * seule etape ou le vendeur peut se perdre.
+ */
+async function handleCopyAndOpen(): Promise<void> {
+  if (!seedIsUsable(seed)) {
+    setStatus("#assistStatus", "Indiquez d'abord le produit que vous vendez.", true);
+    query<HTMLInputElement>("#seedProduct").focus();
+    return;
+  }
+
+  refreshBriefPrompt();
+  // Ouvrir avant le presse-papiers : l'attente asynchrone perdrait le geste utilisateur.
+  const opened = window.open("https://chatgpt.com/", "_blank", "noopener");
+  await copyPrompt("briefPromptPreview");
+
+  setStatus(
+    "#assistStatus",
+    opened
+      ? "Prompt copié et ChatGPT ouvert. Collez-le là-bas, puis ramenez sa réponse ci-dessous."
+      : "Prompt copié. Ouvrez ChatGPT, collez-le, puis ramenez sa réponse ci-dessous."
+  );
+}
+
+function togglePromptPreview(event: Event): void {
+  const button = event.currentTarget as HTMLButtonElement;
+  const preview = query<HTMLTextAreaElement>("#briefPromptPreview");
+  const show = preview.hidden;
+
+  preview.hidden = !show;
+  button.setAttribute("aria-expanded", String(show));
+  button.textContent = show ? "Masquer le prompt" : "Voir le prompt";
+}
+
+function applyBriefResponse(): void {
+  const response = query<HTMLTextAreaElement>("#briefResponse").value;
+
+  if (!response.trim()) {
+    setStatus("#assistStatus", "Collez d'abord la réponse de ChatGPT.", true);
+    return;
+  }
+
+  try {
+    const parsed = parseBriefResponse(response, brief, seed);
+    brief = parsed.brief;
+    saveBrief(brief);
+    rerenderBriefForm();
+    highlightFilledFields();
+
+    const missing = missingEssentials(brief);
+    const count = parsed.filled.length;
+    setStatus(
+      "#assistStatus",
+      missing.length
+        ? `${count} champ(s) rempli(s). À compléter à la main : ${missing.join(", ")}.`
+        : `${count} champ(s) rempli(s). Vérifiez le numéro WhatsApp et le prix avant de générer les images.`,
+      missing.length > 0
+    );
+  } catch (error) {
+    setStatus("#assistStatus", error instanceof Error ? error.message : "Réponse illisible.", true);
+  }
+}
+
+/** Le formulaire est reconstruit d'un bloc : sans signal, on ne voit pas qu'il a bouge. */
+function highlightFilledFields(): void {
+  const form = getBriefForm();
+  form.classList.remove("just-filled");
+  void form.offsetWidth;
+  form.classList.add("just-filled");
+  window.setTimeout(() => form.classList.remove("just-filled"), 1400);
 }

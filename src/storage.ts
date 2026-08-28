@@ -1,9 +1,10 @@
-import { defaultBrief, defaultHotspots } from "./defaults";
+import { defaultBrief, defaultHotspots, emptySeed } from "./defaults";
 import { languages } from "./i18n";
-import type { BriefData, Device, Hotspot } from "./types";
+import type { BriefData, BriefSeed, Device, Hotspot } from "./types";
 
 const STORAGE_KEY = "landing-page-generator:brief:v2";
 const HOTSPOT_KEY = "landing-page-generator:hotspots:v2";
+const SEED_KEY = "landing-page-generator:seed:v1";
 
 export function loadBrief(): BriefData {
   try {
@@ -38,6 +39,7 @@ export function saveBrief(brief: BriefData): void {
 export function resetSavedBrief(): BriefData {
   window.localStorage.removeItem(STORAGE_KEY);
   window.localStorage.removeItem(HOTSPOT_KEY);
+  window.localStorage.removeItem(SEED_KEY);
   return cloneBrief(defaultBrief);
 }
 
@@ -61,6 +63,7 @@ export function loadHotspots(): Record<Device, Hotspot[]> {
         height: Number(hotspot.height) || 2,
         device,
         message: String(hotspot.message || ""),
+        action: hotspot.action === "form" ? "form" : "whatsapp",
       }));
     });
 
@@ -84,4 +87,23 @@ export function cloneBrief(brief: BriefData): BriefData {
 
 export function cloneHotspots(source: Record<Device, Hotspot[]>): Record<Device, Hotspot[]> {
   return JSON.parse(JSON.stringify(source)) as Record<Device, Hotspot[]>;
+}
+
+export function loadSeed(): BriefSeed {
+  try {
+    const stored = window.localStorage.getItem(SEED_KEY);
+    if (!stored) return { ...emptySeed };
+    const parsed = JSON.parse(stored) as Partial<BriefSeed>;
+    return { ...emptySeed, ...parsed };
+  } catch {
+    return { ...emptySeed };
+  }
+}
+
+export function saveSeed(seed: BriefSeed): void {
+  try {
+    window.localStorage.setItem(SEED_KEY, JSON.stringify(seed));
+  } catch {
+    /* voir saveBrief */
+  }
 }

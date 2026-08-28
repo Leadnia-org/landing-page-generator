@@ -14,6 +14,19 @@ export interface FaqItem {
   answer: string;
 }
 
+export interface Palette {
+  /** Fond principal de la page. */
+  background: string;
+  /** Couleur du texte courant. */
+  text: string;
+  /** Accent : titres, prix, details. */
+  accent: string;
+  /** Aplat des boutons d'action. C'est aussi ce que la detection va chercher. */
+  button: string;
+  /** Texte a l'interieur des boutons. */
+  buttonText: string;
+}
+
 export interface BriefData {
   productName: string;
   targetAudience: string;
@@ -31,10 +44,15 @@ export interface BriefData {
   formFields: string[];
   forbiddenClaims: string[];
   visualStyle: string;
+  palette: Palette;
 }
+
+export type HotspotAction = "whatsapp" | "form";
 
 export interface Hotspot {
   id: string;
+  /** WhatsApp, ou defilement vers le vrai formulaire HTML. */
+  action: HotspotAction;
   label: string;
   left: number;
   top: number;
@@ -99,4 +117,19 @@ export interface DetectedRegion {
   height: number;
   /** Part de pixels réellement colorés dans la boîte : 1 = rectangle plein. */
   fill: number;
+}
+
+/**
+ * Ce que le vendeur sait deja sans reflechir : la matiere premiere du prompt.
+ * Le prix et la devise sont injectes comme faits, pas demandes a ChatGPT.
+ */
+export interface BriefSeed {
+  product: string;
+  price: string;
+  currency: string;
+  city: string;
+  audience: string;
+  avoid: string;
+  colors: string;
+  extra: string;
 }

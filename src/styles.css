@@ -19,6 +19,11 @@
   box-sizing: border-box;
 }
 
+/* textarea { display: block } plus bas bat la regle UA de [hidden] : on la retablit. */
+[hidden] {
+  display: none !important;
+}
+
 html {
   background: var(--cream);
   scroll-behavior: smooth;
@@ -1140,4 +1145,305 @@ body.workspace-open {
   outline: 3px solid var(--focus);
   outline-offset: 3px;
   border-radius: 8px;
+}
+
+/* --- Assistant de brief (prompt ChatGPT) --- */
+.assist-block {
+  margin-bottom: 22px;
+  padding: 20px;
+  border: 2px solid rgba(16, 84, 33, 0.28);
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(223, 233, 210, 0.72) 0%, rgba(223, 233, 210, 0.38) 100%);
+}
+
+.assist-head {
+  margin-bottom: 16px;
+}
+
+.assist-head h3 {
+  margin: 0 0 6px;
+  color: var(--green);
+  font-size: 1.2rem;
+  line-height: 1.2;
+}
+
+.assist-head p {
+  margin: 0;
+  max-width: 62ch;
+  color: #3f362d;
+  font-size: 0.9rem;
+  font-weight: 400;
+  line-height: 1.5;
+}
+
+.seed-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 14px;
+}
+
+.seed-grid .seed-wide {
+  grid-column: 1 / -1;
+}
+
+.seed-grid input {
+  min-height: 42px;
+}
+
+.prompt-preview {
+  margin-bottom: 12px;
+  font-family: "Courier New", monospace;
+  font-size: 0.8rem;
+}
+
+#copyBriefPrompt:disabled {
+  background: #cfc9ba;
+  box-shadow: none;
+  cursor: not-allowed;
+}
+
+/* Le formulaire est reconstruit d'un bloc : ce flash dit qu'il vient de bouger. */
+.brief-form.just-filled .generated-block input,
+.brief-form.just-filled .generated-block textarea {
+  animation: field-filled 1.4s ease-out;
+}
+
+@keyframes field-filled {
+  0% {
+    border-color: var(--green);
+    background: #e4f2d8;
+  }
+  100% {
+    border-color: rgba(106, 61, 28, 0.27);
+    background: rgba(255, 254, 248, 0.98);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .brief-form.just-filled .generated-block input,
+  .brief-form.just-filled .generated-block textarea {
+    animation: none;
+  }
+}
+
+@media (max-width: 720px) {
+  .seed-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.assist-block label {
+  display: block;
+  margin-bottom: 12px;
+  font-size: 0.86rem;
+  font-weight: 800;
+  color: var(--green-dark);
+}
+
+.assist-block textarea {
+  width: 100%;
+  margin-top: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--cream-light);
+  color: var(--ink);
+  font-weight: 400;
+  line-height: 1.45;
+  resize: vertical;
+}
+
+.assist-block textarea[readonly] {
+  background: #fffdf6;
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+.assist-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.hotspot-action {
+  margin-bottom: 0;
+  font-size: 0.86rem;
+}
+
+.hotspot-action select {
+  width: 100%;
+  min-height: 40px;
+  margin-top: 6px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--cream-light);
+  color: var(--ink);
+}
+
+/* Tout ce que ChatGPT ecrit : replie par defaut, ouvert pour verifier. */
+.generated-block {
+  margin-top: 22px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(255, 250, 239, 0.6);
+}
+
+.generated-block summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  padding: 14px 16px;
+  border-radius: 12px;
+  cursor: pointer;
+}
+
+/* display:flex supprime le marqueur natif : sans chevron, la ligne ne dit plus qu'elle s'ouvre. */
+.generated-block summary::-webkit-details-marker {
+  display: none;
+}
+
+.generated-block summary::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-right: 2px solid var(--green);
+  border-bottom: 2px solid var(--green);
+  transform: rotate(-45deg);
+  transition: transform 0.15s ease;
+}
+
+.generated-block[open] summary::before {
+  transform: rotate(45deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .generated-block summary::before {
+    transition: none;
+  }
+}
+
+.generated-block summary:hover {
+  background: rgba(223, 233, 210, 0.5);
+}
+
+.generated-block[open] summary {
+  border-bottom: 1px solid var(--line);
+  border-radius: 12px 12px 0 0;
+}
+
+.generated-title {
+  color: var(--green);
+  font-weight: 900;
+}
+
+.generated-hint {
+  color: var(--muted);
+  font-size: 0.84rem;
+  font-weight: 700;
+}
+
+.generated-block > *:not(summary) {
+  padding: 0 16px;
+}
+
+.generated-block > .brief-toolbar {
+  padding-top: 16px;
+}
+
+.generated-block > .advanced-block {
+  padding-bottom: 4px;
+}
+
+.palette-fieldset .field-hint {
+  margin: 0 0 12px;
+  font-weight: 400;
+}
+
+.palette-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 12px;
+}
+
+.swatch {
+  margin: 0;
+  font-size: 0.82rem;
+}
+
+.swatch-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.swatch input[type="color"] {
+  width: 44px;
+  min-width: 44px;
+  height: 38px;
+  min-height: 38px;
+  padding: 2px;
+  margin-top: 0;
+  cursor: pointer;
+}
+
+.swatch output {
+  font-family: "Courier New", monospace;
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+/* Zone non selectionnee : une ligne, scannable, cliquable en entier. */
+.hotspot-row.is-compact {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px 6px 6px;
+}
+
+.hotspot-pick {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: baseline;
+  gap: 12px;
+  min-height: 40px;
+  min-width: 0;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  text-align: start;
+}
+
+.hotspot-pick:hover {
+  background: rgba(223, 233, 210, 0.55);
+}
+
+.hotspot-name {
+  flex: 1 1 auto;
+  overflow: hidden;
+  color: var(--green-dark);
+  font-weight: 900;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hotspot-pos {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-family: "Courier New", monospace;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.hotspot-hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.84rem;
+  font-weight: 700;
+  line-height: 1.4;
 }

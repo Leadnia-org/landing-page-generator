@@ -1,4 +1,13 @@
-import type { BriefData, Device, Hotspot } from "./types";
+import type { BriefData, BriefSeed, Device, Hotspot, Palette } from "./types";
+
+/** Point de depart neutre : ChatGPT remplace ces couleurs selon le produit. */
+export const defaultPalette: Palette = {
+  background: "#f6ecd8",
+  text: "#13311d",
+  accent: "#105421",
+  button: "#25d366",
+  buttonText: "#ffffff",
+};
 
 export const defaultBrief: BriefData = {
   productName: "Amlou pour enfant",
@@ -33,11 +42,12 @@ export const defaultBrief: BriefData = {
   forbiddenClaims: ["healthy", "natural", "organic", "bien-être", "safe", "nutritious", "energy", "vitamins"],
   visualStyle:
     "Fond crème chaleureux, vert foncé, accents amande et brun, détails décoratifs inspirés du Maroc, style premium simple, cartes arrondies, photographie produit réaliste.",
+  palette: { ...defaultPalette },
 };
 
 export const defaultHotspots: Record<Device, Hotspot[]> = {
   desktop: [
-    { id: "hero", label: "CTA héro", left: 9.65, top: 28.72, width: 28.8, height: 3.18, device: "desktop", message: "" },
+    { id: "hero", label: "CTA héro", left: 9.65, top: 28.72, width: 28.8, height: 3.18, device: "desktop", message: "", action: "whatsapp" },
     {
       id: "milieu",
       label: "CTA milieu",
@@ -47,11 +57,12 @@ export const defaultHotspots: Record<Device, Hotspot[]> = {
       height: 2.78,
       device: "desktop",
       message: "",
+      action: "whatsapp",
     },
-    { id: "bas", label: "CTA bas", left: 30.05, top: 97.25, width: 39.65, height: 2.68, device: "desktop", message: "" },
+    { id: "bas", label: "CTA bas", left: 30.05, top: 97.25, width: 39.65, height: 2.68, device: "desktop", message: "", action: "whatsapp" },
   ],
   mobile: [
-    { id: "hero", label: "CTA héro", left: 7.25, top: 23.42, width: 33.5, height: 2.25, device: "mobile", message: "" },
+    { id: "hero", label: "CTA héro", left: 7.25, top: 23.42, width: 33.5, height: 2.25, device: "mobile", message: "", action: "whatsapp" },
     {
       id: "formulaire",
       label: "CTA formulaire",
@@ -61,8 +72,9 @@ export const defaultHotspots: Record<Device, Hotspot[]> = {
       height: 1.95,
       device: "mobile",
       message: "",
+      action: "whatsapp",
     },
-    { id: "bas", label: "CTA bas", left: 10.15, top: 94.88, width: 47.2, height: 2.25, device: "mobile", message: "" },
+    { id: "bas", label: "CTA bas", left: 10.15, top: 94.88, width: 47.2, height: 2.25, device: "mobile", message: "", action: "whatsapp" },
   ],
 };
 
@@ -73,3 +85,14 @@ export const landingModeLabels = {
 } as const;
 
 export const STICKY_LABEL_FALLBACK = "Bouton WhatsApp fixe";
+
+export const emptySeed: BriefSeed = {
+  product: "",
+  price: "",
+  currency: "Dhs",
+  city: "",
+  audience: "",
+  avoid: "",
+  colors: "",
+  extra: "",
+};

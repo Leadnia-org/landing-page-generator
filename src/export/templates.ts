@@ -1,4 +1,5 @@
 import { languageMeta } from "../i18n";
+import { mix, rgba, surfaceOn } from "../utils/color";
 import type { BriefData, Device, Hotspot, ImageSize, LandingFiles } from "../types";
 import { escapeAttr, escapeHtml, fieldName, fieldType, formatPrice, slugify } from "../utils/text";
 import { formatNumberForDisplay, normalizeWhatsAppNumber, whatsappLink } from "../utils/whatsapp";
@@ -79,14 +80,29 @@ ${fallbackHtml}
 }
 
 function buildHotspotLink(brief: BriefData, hotspot: Hotspot): string {
+  const classes = `hotspot hotspot-${hotspot.device} ${hotspotClass(hotspot)}`;
+
+  // Une zone posee sur un formulaire dessine dans l'image fait defiler vers le
+  // vrai formulaire HTML au lieu d'ouvrir WhatsApp.
+  if (hotspot.action === "form" && needsLeadForm(brief)) {
+    return `        <a class="${classes}" href="#lead-form" aria-label="${escapeAttr(`${hotspot.label} - ${languageMeta(brief.language).strings.formTitleLead}`)}"></a>`;
+  }
+
   const message = hotspot.message.trim() || brief.baseMessage;
   const href = escapeAttr(whatsappLink(brief.whatsappNumber, message));
   const messageAttr = hotspot.message.trim() ? ` data-wa-message="${escapeAttr(hotspot.message.trim())}"` : "";
 
-  return `        <a class="hotspot hotspot-${hotspot.device} ${hotspotClass(hotspot)}" href="${href}" target="_blank" rel="noopener" data-wa data-wa-label="${escapeAttr(hotspot.label)}"${messageAttr} aria-label="${escapeAttr(`${hotspot.label} - ${brief.ctaText}`)}"></a>`;
+  return `        <a class="${classes}" href="${href}" target="_blank" rel="noopener" data-wa data-wa-label="${escapeAttr(hotspot.label)}"${messageAttr} aria-label="${escapeAttr(`${hotspot.label} - ${brief.ctaText}`)}"></a>`;
 }
 
 function buildSticky(brief: BriefData): string {
+  if (!needsVisualWhatsApp(brief)) {
+    return `    <a class="wa-sticky" href="#lead-form" aria-label="${escapeAttr(brief.ctaText)}">
+      <span class="wa-sticky-icon" aria-hidden="true"></span>
+      <span class="wa-sticky-text">${escapeHtml(brief.ctaText)}</span>
+    </a>`;
+  }
+
   const href = escapeAttr(whatsappLink(brief.whatsappNumber, brief.baseMessage));
 
   return `    <a class="wa-sticky" href="${href}" target="_blank" rel="noopener" data-wa data-wa-label="Sticky" aria-label="${escapeAttr(brief.ctaText)}">
@@ -145,7 +161,7 @@ function buildFormSection(brief: BriefData): string {
   const submit = brief.landingMode === "leads" ? strings.submitLead : brief.ctaText;
 
   return `
-      <section class="form-section" aria-labelledby="lead-title">
+      <section class="form-section" id="lead-form" aria-labelledby="lead-title">
         <form class="lead-form js-whatsapp-form" novalidate>
           <h2 id="lead-title">${escapeHtml(title)}</h2>
           <p>${escapeHtml(brief.productName)} - ${escapeHtml(formatPrice(brief))}</p>
@@ -171,18 +187,23 @@ function buildFormField(label: string, index: number): string {
 }
 
 function buildStyleCss(brief: BriefData, hotspots: Record<Device, Hotspot[]>): string {
-  const visualWhatsApp = needsVisualWhatsApp(brief);
+  // La page sous l'image doit porter la meme palette que l'image, sinon le
+  // formulaire jure avec le visuel des qu'on quitte le vert/creme d'origine.
+  const { background, text, accent, button, buttonText } = brief.palette;
+  const surface = surfaceOn(background);
+  const buttonLow = mix(button, "#000000", 0.24);
+  const buttonHigh = mix(button, "#FFFFFF", 0.16);
   const positions = [...hotspots.desktop, ...hotspots.mobile]
     .map(
       (hotspot) =>
         `.${hotspotClass(hotspot)}{left:${hotspot.left}%;top:${hotspot.top}%;width:${hotspot.width}%;height:${hotspot.height}%;}`
     )
     .join("\n");
-  const mobilePadding = visualWhatsApp ? "body{padding-bottom:calc(84px + env(safe-area-inset-bottom,0px));}" : "";
+  const mobilePadding = "body{padding-bottom:calc(84px + env(safe-area-inset-bottom,0px));}";
 
-  return `:root{--cream:#f7eddc;--green:#105421;--green-dark:#062f16;--wa:#25d366;--line:rgba(106,61,28,.24);--focus:#ffc529;--error:#a4281f;}
+  return `:root{--cream:${background};--green:${accent};--green-dark:${text};--wa:${button};--wa-low:${buttonLow};--wa-high:${buttonHigh};--btn-text:${buttonText};--surface:${surface};--line:${rgba(text, 0.24)};--shadow:${rgba(text, 0.16)};--focus:#ffc529;--error:#a4281f;}
 *{box-sizing:border-box;}
-html{background:var(--cream);}
+html{background:var(--cream);scroll-behavior:smooth;}
 body{margin:0;min-width:320px;overflow-x:hidden;background:var(--cream);color:var(--green-dark);font-family:Arial,Helvetica,sans-serif;}
 button,input{font:inherit;}
 .visual-wrap{position:relative;width:100%;max-width:1440px;margin:0 auto;line-height:0;background:var(--cream);}
@@ -194,29 +215,30 @@ button,input{font:inherit;}
 .hotspot:focus-visible,.wa-sticky:focus-visible,button:focus-visible,input:focus-visible,a:focus-visible{outline:4px solid var(--focus);outline-offset:4px;}
 .hotspot-mobile{display:none;}
 ${positions}
-.form-section{padding:42px 16px 52px;background:linear-gradient(180deg,#fff6e6 0%,#f3e3c8 100%);}
-.lead-form{width:min(720px,100%);margin:0 auto;padding:24px;border:1px solid var(--line);border-radius:20px;background:#fffaf0;box-shadow:0 18px 44px rgba(54,34,13,.14);}
+.form-section{scroll-margin-top:12px;padding:42px 16px 52px;background:var(--cream);}
+.lead-form{width:min(720px,100%);margin:0 auto;padding:24px;border:1px solid var(--line);border-radius:20px;background:var(--surface);box-shadow:0 18px 44px var(--shadow);}
 .lead-form h2{margin:0;color:var(--green);font-size:clamp(1.6rem,4vw,2.5rem);line-height:1.08;text-align:center;text-transform:uppercase;}
-.lead-form p{margin:10px 0 22px;text-align:center;font-weight:900;color:#6a3d1c;}
+.lead-form p{margin:10px 0 22px;text-align:center;font-weight:900;color:var(--green);}
 .form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;}
 .form-grid label{display:block;color:var(--green-dark);font-weight:900;}
-.form-grid input{width:100%;min-height:48px;margin-top:8px;border:1px solid var(--line);border-radius:12px;background:#fffef8;padding:0 14px;color:var(--green-dark);}
+.form-grid input{width:100%;min-height:48px;margin-top:8px;border:1px solid var(--line);border-radius:12px;background:var(--surface);padding:0 14px;color:var(--green-dark);}
 .form-grid input.is-invalid{border-color:var(--error);box-shadow:0 0 0 3px rgba(164,40,31,.13);}
-.lead-form button{display:block;width:min(360px,100%);min-height:52px;margin:20px auto 0;border:0;border-radius:999px;background:linear-gradient(180deg,#168533 0%,#0a4a1d 100%);color:#fff;font-weight:900;text-transform:uppercase;cursor:pointer;}
+.lead-form button{display:block;width:min(360px,100%);min-height:52px;margin:20px auto 0;border:0;border-top:1px solid var(--wa-high);border-radius:999px;background:linear-gradient(180deg,var(--wa) 0%,var(--wa-low) 100%);color:var(--btn-text);font-weight:900;text-transform:uppercase;cursor:pointer;box-shadow:0 6px 0 var(--wa-low),0 12px 22px var(--shadow);transition:transform .08s ease,box-shadow .08s ease;}
+.lead-form button:active{transform:translateY(4px);box-shadow:0 2px 0 var(--wa-low),0 6px 12px var(--shadow);}
 .sr-only{position:absolute;width:1px;height:1px;padding:0;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0;}
-.wa-sticky{position:fixed;z-index:20;display:flex;align-items:center;justify-content:center;gap:10px;min-height:56px;padding:0 20px;border-radius:999px;background:linear-gradient(180deg,#25d366 0%,#128c3d 100%);color:#fff;font-weight:900;text-align:center;text-decoration:none;box-shadow:0 14px 30px rgba(9,75,31,.34);opacity:0;visibility:hidden;transform:translateY(16px);transition:opacity .18s ease,transform .18s ease;}
+.wa-sticky{position:fixed;z-index:20;display:flex;align-items:center;justify-content:center;gap:10px;min-height:56px;padding:0 20px;border-top:1px solid var(--wa-high);border-radius:999px;background:linear-gradient(180deg,var(--wa) 0%,var(--wa-low) 100%);color:var(--btn-text);font-weight:900;text-align:center;text-decoration:none;box-shadow:0 5px 0 var(--wa-low),0 14px 30px var(--shadow);opacity:0;visibility:hidden;transform:translateY(16px);transition:opacity .18s ease,transform .18s ease;}
 .wa-sticky.is-visible{opacity:1;visibility:visible;transform:none;}
 .wa-sticky:active{transform:scale(.98);}
 .wa-sticky-text{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .wa-sticky-icon{flex:0 0 auto;width:22px;height:22px;background:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23ffffff'%3E%3Cpath d='M12 2a10 10 0 0 0-8.6 15.1L2 22l5-1.3A10 10 0 1 0 12 2zm5.3 14.1c-.2.6-1.2 1.2-1.7 1.2-.5.1-1 .1-1.6-.1-.4-.1-.9-.3-1.5-.6-2.7-1.2-4.4-3.9-4.5-4.1-.1-.2-1.1-1.4-1.1-2.6 0-1.2.6-1.8.9-2.1.2-.2.5-.3.7-.3h.5c.2 0 .4 0 .6.5l.8 1.9c.1.2.1.4 0 .6l-.3.5-.4.4c-.1.1-.3.3-.1.6.2.3.8 1.3 1.7 2.1 1.2 1 2.1 1.4 2.4 1.5.3.1.5.1.6-.1l.9-1c.2-.2.4-.2.6-.1l1.8.9c.5.2.6.4.6.5.1.2.1.7-.1 1.3z'/%3E%3C/svg%3E") center/contain no-repeat;}
-.wa-fallback{position:fixed;z-index:30;left:50%;bottom:16px;width:min(420px,calc(100% - 24px));transform:translateX(-50%);padding:18px 18px 16px;border:1px solid var(--line);border-radius:18px;background:#fffaf0;box-shadow:0 20px 50px rgba(20,12,4,.28);}
+.wa-fallback{position:fixed;z-index:30;left:50%;bottom:16px;width:min(420px,calc(100% - 24px));transform:translateX(-50%);padding:18px 18px 16px;border:1px solid var(--line);border-radius:18px;background:var(--surface);box-shadow:0 20px 50px var(--shadow);}
 .wa-fallback[hidden]{display:none;}
 .wa-fallback strong{display:block;color:var(--green);font-size:1.05rem;}
 .wa-fallback p{margin:8px 0 0;font-size:.95rem;line-height:1.4;}
 .wa-fallback-number{font-weight:900;font-size:1.15rem;letter-spacing:.02em;direction:ltr;}
 .wa-fallback-actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:14px;}
-.wa-fallback-actions button,.wa-fallback-actions a{flex:1 1 140px;min-height:46px;display:flex;align-items:center;justify-content:center;border:0;border-radius:999px;background:var(--green);color:#fff;font-weight:900;text-decoration:none;cursor:pointer;}
-.wa-fallback-actions a{background:#128c3d;}
+.wa-fallback-actions button,.wa-fallback-actions a{flex:1 1 140px;min-height:46px;display:flex;align-items:center;justify-content:center;border:0;border-radius:999px;background:var(--green);color:var(--btn-text);font-weight:900;text-decoration:none;cursor:pointer;}
+.wa-fallback-actions a{background:var(--wa);color:var(--btn-text);}
 .wa-fallback-close{position:absolute;top:8px;inset-inline-end:10px;width:32px;height:32px;border:0;border-radius:50%;background:transparent;color:var(--green-dark);font-size:1.4rem;line-height:1;cursor:pointer;}
 [dir="rtl"] .form-grid label,[dir="rtl"] .wa-fallback{text-align:right;}
 @media(min-width:768px){.wa-sticky{inset-inline-end:22px;bottom:22px;}}

@@ -11,8 +11,17 @@ export interface ChecklistItem {
   target?: string;
 }
 
+/** Les zones cliquables existent dans les trois modes : seule leur action change. */
+export function usesHotspots(): boolean {
+  return true;
+}
+
 export function needsVisualWhatsApp(brief: BriefData): boolean {
   return brief.landingMode !== "leads";
+}
+
+export function defaultHotspotAction(brief: BriefData): "whatsapp" | "form" {
+  return brief.landingMode === "leads" ? "form" : "whatsapp";
 }
 
 export function needsLeadForm(brief: BriefData): boolean {
@@ -69,6 +78,7 @@ export function createChecklist(
   const numberCheck = normalizeWhatsAppNumber(brief.whatsappNumber);
   const allHotspots = [...hotspots.desktop, ...hotspots.mobile];
   const visualWhatsApp = needsVisualWhatsApp(brief);
+  const whatsappHotspots = allHotspots.filter((hotspot) => hotspot.action !== "form");
 
   return [
     {
@@ -97,31 +107,29 @@ export function createChecklist(
     {
       id: "cta",
       target: "input[name=\"ctaText\"]",
-      label: "CTA et message WhatsApp renseignés",
+      label: whatsappHotspots.length || visualWhatsApp ? "CTA et message WhatsApp renseignés" : "CTA renseigné",
       passed: Boolean(brief.ctaText.trim() && brief.baseMessage.trim()),
       blocking: true,
     },
     {
       id: "hotspot-count",
       target: "#hotspotEditor",
-      label: visualWhatsApp
-        ? "Au moins un bouton WhatsApp par image"
-        : "Mode leads : aucun bouton visuel requis",
-      passed: !visualWhatsApp || (hotspots.desktop.length > 0 && hotspots.mobile.length > 0),
+      label: "Au moins une zone cliquable par image",
+      passed: hotspots.desktop.length > 0 && hotspots.mobile.length > 0,
       blocking: true,
     },
     {
       id: "hotspots",
       target: "#hotspotEditor",
       label: "Zones cliquables dans les limites de l'image",
-      passed: !visualWhatsApp || allHotspots.every(hotspotIsValid),
+      passed: allHotspots.every(hotspotIsValid),
       blocking: true,
     },
     {
       id: "hotspot-size",
       target: "#hotspotEditor",
       label: "Zones assez grandes pour être touchées au doigt",
-      passed: !visualWhatsApp || !allHotspots.some(hotspotIsTiny),
+      passed: !allHotspots.some(hotspotIsTiny),
       blocking: false,
     },
     {
